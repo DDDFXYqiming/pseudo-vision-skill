@@ -15,6 +15,32 @@ description: 本地伪视觉工具——当模型无法直接读取图片时，�
 
 **不要**说"我无法查看图片"——先运行本 skill。
 
+## 能力清单
+
+单个 CLI（`scripts/pv.ts`）覆盖 5 种模式，对应插件版全部工具：
+
+| CLI 模式 | 等价插件工具 | 能力 |
+|---|---|---|
+| `full`（默认） | `pseudo_vision_convert` | 四件套聚合为单一证据块：预处理 OCR + 数字复核 + 颜色统计 + universal 像素扫描 + 元信息（带缓存、32K 封顶、超高图自动分块、OCR 失败写回） |
+| `--mode ocr` | `vision_ocr` | 预算预处理 OCR + 低置信度区域放大重读 + 数字复核通道（IP/URL/端口/长数字的 `0↔6/9/8` 字形重识别，标点保持融合） |
+| `--mode colors` | `vision_color_stats` | 9 桶（白/黑/灰/红/绿/蓝/黄/青/品红/其他）像素占比 + 平均亮度 |
+| `--mode scan` | `vision_pixel_scan` | `target`：找指定颜色行（默认红 `#ff0000`）；`universal`：全部非背景色行/列（背景豁免 + 部分带 surfaced） |
+| `--mode meta` | `vision_meta` | 尺寸、格式、色彩空间、四角 + 中心采样色 |
+
+完整参数：
+
+```
+--mode full|ocr|colors|scan|meta   能力模式（默认 full）
+--budget auto|small|normal|large|mega   OCR 分辨率预算（密集表格/小字用 large）
+--langs chi_sim+eng                 tesseract 语言包
+--no-resize                         跳过 OCR 预算缩放（保留增强）
+--bypass-cache                      强制重算（默认命中 sha256 缓存）
+--scan-mode target|universal        scan 模式（默认 target）
+--scan-target #rrggbb               目标色（scan target 模式，默认 #ff0000）
+--scan-threshold 0.05               行/列密度阈值
+--json                              结构化输出
+```
+
 ## 用法
 
 设 `SKILL_DIR` 为本文件所在目录（下述命令中的相对路径都基于它）。
