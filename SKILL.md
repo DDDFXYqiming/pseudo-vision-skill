@@ -73,7 +73,12 @@ node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片路径> --mode sc
 node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片路径> --mode meta
 ```
 
-常用选项：`--budget large`（密集表格/小字）、`--langs chi_sim+eng`、`--json`（结构化输出）、`--bypass-cache`（强制重算）。
+操作要点：
+
+- 一次转换一张图；多张图逐张运行
+- 需要程序化解析输出时加 `--json`（单对象输出：`mode` / `file` / 各模式详情字段 / `text` / `error`）
+- 命令失败分两类：**护栏拒绝**（非图片文件 / 超 64MB，预期行为，换合法图片即可）与**管线失败**（证据块内带 `[OCR 失败: …]`，颜色/扫描/元信息块仍有效）
+- 首次使用若报缺 `node_modules`，先跑 `node SKILL_DIR/setup.mjs`
 
 ## 获取图片路径
 
@@ -105,7 +110,3 @@ node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片路径> --mode me
 - OCR 仍可能认错非数字 token；数字关键 token（IP/URL/端口/长数字）已由复核通道兜底
 - 颜色统计只给占比，无法还原图标/图片细节
 - 同一图片重复转换有磁盘缓存（sha256 键），结果一致且秒回
-
-## 实现说明
-
-算法与 dsh-pseudo-vision / pi-pseudo-vision 插件完全同源（同一份 vision 算法层），由 `sync-from-pi.mjs` 从算法源仓库同步。语言包在 `SKILL_DIR/tessdata/`（离线 OCR）。
