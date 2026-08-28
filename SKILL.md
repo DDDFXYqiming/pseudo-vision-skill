@@ -1,0 +1,85 @@
+---
+name: pseudo-vision
+description: 本地伪视觉工具——当模型无法直接读取图片时，把图片转换为结构化文本证据（OCR 文字 + 数字复核 + 颜色统计 + 像素扫描 + 元信息）。当消息中包含图片/截图/照片且需要分析其内容、用户要求识别图中文字、描述图片、或提到"看图/识图/读图/图片里"时使用。纯本地执行（tesseract.js + sharp），无外部视觉 API。
+---
+
+# pseudo-vision：本地伪视觉
+
+你（当前模型）可能无法直接读取图片内容。本 skill 用本地管线把图片转换为结构化文本证据，读完证据即可"看图"。
+
+## 何时使用
+
+- 用户消息附带图片（截图/照片），并询问图片内容、图中文字、界面状态等
+- 你收到图片路径且任务需要图片内容（如分析 UI 截图、读取报错截图、识别表格）
+- 用户说"看一下这张图 / 图里写了什么 / 这是什么界面"
+
+**不要**说"我无法查看图片"——先运行本 skill。
+
+## 用法
+
+设 `SKILL_DIR` 为本文件所在目录（下述命令中的相对路径都基于它）。
+
+首次使用前若未初始化（缺 node_modules）：
+
+```bash
+node SKILL_DIR/setup.mjs
+```
+
+完整转换（推荐，等价于插件版全部 4 个工具的聚合证据）：
+
+```bash
+node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片绝对路径>
+```
+
+单项查询（可选）：
+
+```bash
+# 仅 OCR 文字（含低置信度重试 + IP/URL/端口数字复核）
+node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片路径> --mode ocr
+
+# 仅颜色统计（9 桶占比 + 平均亮度）
+node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片路径> --mode colors
+
+# 像素扫描：默认找指定颜色（红色）的行；universal 模式输出全部非背景色行/列
+node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片路径> --mode scan --scan-mode universal
+
+# 仅元信息（尺寸/格式/四角与中心采样色）
+node --experimental-strip-types SKILL_DIR/scripts/pv.ts <图片路径> --mode meta
+```
+
+常用选项：`--budget large`（密集表格/小字）、`--langs chi_sim+eng`、`--json`（结构化输出）、`--bypass-cache`（强制重算）。
+
+## 获取图片路径
+
+- 框架给出图片文件路径（常见于粘贴截图后）→ 直接使用该路径
+- 图片以 base64 形式出现在消息中 → 先落盘再转换：
+  ```bash
+  echo "<base64 数据>" | base64 -d > /tmp/pv-image.png
+  ```
+- 你有 read_image / screenshot 类工具且其返回图片数据 → 先保存到文件
+
+大文件注意：图片超过 64MB 或非 PNG/JPEG/WebP/GIF 会被护栏拒绝（这是预期行为）。
+
+## 解读证据块
+
+输出证据格式（各块含义）：
+
+- `[pseudo-vision … sha256=… budget=…]`：原图指纹与所用预算
+- `[OCR chi_sim+eng] N 行`：识别的文字行，`x=… y=…` 是归一化坐标（0-1，可用于定位）
+- `[数字复核 N 处]`：对 IP/URL/端口/长数字的自动纠错记录（原读 → 纠正 + 置信度变化），**纠正后的值更可信**
+- `[颜色统计]`：像素颜色分布 + 平均亮度（可推断深/浅色主题）
+- `[像素扫描]`：非背景色的行/列分布（可推断布局结构、分割线、表格）
+- `[元信息]`：尺寸/格式/四角与中心采样色
+- `[OCR 失败: …]`：OCR 管线出错的原因（此时颜色/扫描/元信息仍有效）
+- `[证据已截断: …]`：超大证据被截断到 32K 字符
+
+## 能力边界（如实告知用户）
+
+- 伪视觉 ≠ 真多模态：复杂空间关系、真实照片细节、图标样式的描述精度有限
+- OCR 仍可能认错非数字 token；数字关键 token（IP/URL/端口/长数字）已由复核通道兜底
+- 颜色统计只给占比，无法还原图标/图片细节
+- 同一图片重复转换有磁盘缓存（sha256 键），结果一致且秒回
+
+## 实现说明
+
+算法与 dsh-pseudo-vision / pi-pseudo-vision 插件完全同源（同一份 vision 算法层），由 `sync-from-pi.mjs` 从算法源仓库同步。语言包在 `SKILL_DIR/tessdata/`（离线 OCR）。

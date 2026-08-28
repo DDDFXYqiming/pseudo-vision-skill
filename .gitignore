@@ -1,0 +1,9 @@
+node_modules/
+cache/
+tessdata/*.traineddata
+tessdata/*.traineddata.gz
+tests/.tmp-cache/
+tests/.tmp-*.png
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,24 @@
+{
+  "name": "pseudo-vision-skill",
+  "version": "0.1.0",
+  "description": "Standalone pseudo-vision skill: local OCR + color-stats + pixel-scan + metadata evidence pipeline for text-only agents. No external vision API. Algorithm source: pi-pseudo-vision / dsh-pseudo-vision.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "setup": "node setup.mjs",
+    "pv": "node --experimental-strip-types scripts/pv.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "sync": "node sync-from-pi.mjs"
+  },
+  "dependencies": {
+    "sharp": "0.33.5",
+    "tesseract.js": "5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

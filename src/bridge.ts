@@ -1,0 +1,334 @@
+/**
+ * Image→text bridge.
+ *
+ * When a turn carries an `ImageContent` block AND the routed model does not
+ * declare image input, swap that block for a structured text block built
+ * from the four vision tools (ocr / color-stats / pixel-scan / meta). This
+ * is the exact local evidence pipeline used to make text-only models process
+ * images by hand with bash + Python; here it is fixed and reproducible.
+ *
+ * The bridge never modifies image bytes; the model still receives pure text.
+ * OCR runs on a preprocessed copy (budget resize + dark-mode inversion +
+ * greyscale/contrast/sharpen + white border, see vision/preprocess.ts), while
+ * colour analysis keeps using the ORIGINAL bytes. The only persistence side
+ * effect is an on-disk cache keyed by the image hash, resolved budget, and
+ * complete OCR pipeline version/parameters, so different preprocessing choices
+ * never share a stale result.
+ *
+ * Ported from dsh-pseudo-vision by the same author.
+ */
+
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import sharp from "sharp";
+
+import {
+    decodeAndColorStats,
+    formatColorStatsBlock,
+} from "./vision/color-stats.ts";
+import { readMeta, formatMetaBlock } from "./vision/meta.ts";
+import {
+    formatDigitFixBlock,
+    formatOcrBlock,
+    formatOcrRetryBlock,
+    ocrWithLowConfidenceRetry,
+} from "./vision/ocr.ts";
+import {
+    formatUniversalScanBlock,
+    pixelScanUniversal,
+} from "./vision/pixel-scan.ts";
+import { chunkedOcr, type ChunkOcrResult } from "./vision/chunk-ocr.ts";
+import {
+    BUDGETS,
+    isDarkModeFromStats,
+    preprocessForOcr,
+} from "./vision/preprocess.ts";
+
+/** 原图高度超过该值走分块 OCR。 */
+const CHUNK_HEIGHT_THRESHOLD = 3000;
+const CHUNK_TARGET_HEIGHT = 2000;
+const CHUNK_OVERLAP = 100;
+const OCR_CONFIDENCE_THRESHOLD = 60;
+const OCR_MAX_RETRY_REGIONS = 8;
+const OCR_RETRY_UPSCALE = 3;
+
+/** 'auto' 预算下超过该像素数切到 large（>210 万像素）。 */
+const AUTO_LARGE_THRESHOLD = 2_100_000;
+
+/**
+ * 证据文本封顶（v0.5.4）：本地管线允许 16M 像素的图，但 OCR 全文可能
+ * 达几万字把上下文撑爆。返回给模型的证据统一截断到约 8K tokens
+ * （32K 字符，按 CJK≈1 token/字保守估），并显式标注被截断。
+ */
+export const MAX_EVIDENCE_CHARS = 32_000;
+
+export function capEvidence(text: string): string {
+    if (text.length <= MAX_EVIDENCE_CHARS) return text;
+    return (
+        text.slice(0, MAX_EVIDENCE_CHARS)
+        + `\n[证据已截断：${text.length} 字符 > ${MAX_EVIDENCE_CHARS}（约 ${Math.ceil(text.length / 4)} tokens），仅保留前 ${MAX_EVIDENCE_CHARS} 字符]`
+    );
+}
+
+/**
+ * Cache namespace for every OCR-affecting knob. Keep old cache files on disk,
+ * but never let a result made by the old fixed pipeline satisfy a new request.
+ * v2: universal row+col pixel scan (non-background buckets, focusX) joined
+ * the evidence set, so results produced by the red-only scan must not be
+ * served from cache.
+ * v3: digit verification pass (whitelist re-OCR of IP/URL/port tokens)
+ * corrects OCR line text, so pre-digit-pass cache entries are stale.
+ */
+export const OCR_CACHE_PIPELINE =
+    "ocr-v5-min224-factor28-up800-border10-dark-condmedian-enhance-chunk3000-2000-100-retry60-8x3-cjkfix-replacemain-textfirst-psm6num-scan-rowcol-v1-digitverify-v1";
+
+export interface ResolvedImage {
+    /** sha256 of the image bytes (truncated 12 chars in blocks). */
+    sha256: string;
+    bytes: Buffer;
+    mimeType: string;
+}
+
+export interface BridgeOptions {
+    /** Cache root (per agent). */
+    cacheDir: string;
+    /** Force re-computation even when a cached result exists. */
+    bypassCache?: boolean;
+    /** OCR 分辨率预算：'auto' | 'small' | 'normal' | 'large' | 'mega'（缺省 auto）。 */
+    ocrBudget?: string;
+    /** Tesseract language pack, defaulting to chi_sim+eng. */
+    langs?: string;
+    /** Skip budget resize/upscale while retaining OCR enhancement. */
+    ocrNoResize?: boolean;
+}
+
+interface CacheEntry {
+    text: string;
+    budget: string;
+    width: number;
+    height: number;
+    chunkCount: number;
+    retryCount: number;
+    ocrBytes?: number;
+}
+
+export function buildVisionCacheKey(
+    sha256: string,
+    budget: string,
+    params: { langs?: string; noResize?: boolean } = {},
+): string {
+    const langs = (params.langs ?? "chi_sim+eng").replace(/[^a-zA-Z0-9+_-]/g, "_");
+    const resize = params.noResize === true ? "original" : "budget";
+    return `${sha256}-${budget}-${resize}-${langs}-${OCR_CACHE_PIPELINE}.json`;
+}
+
+function resolveOcrBudget(
+    budget: string | undefined,
+    width: number,
+    height: number,
+): string {
+    if (budget !== undefined && budget !== "auto" && Object.hasOwn(BUDGETS, budget)) {
+        return budget;
+    }
+    return width * height > AUTO_LARGE_THRESHOLD ? "large" : "normal";
+}
+
+function formatChunkedOcrBlock(result: ChunkOcrResult): string {
+    if (result.chunks.length === 0) {
+        return `[OCR 整图]\n${result.fullText}`;
+    }
+    return `[OCR 分块 ${result.chunkCount}]\n${result.fullText}`;
+}
+
+/**
+ * Convert an image buffer into the structured text block the text-only model
+ * will actually consume. Returns a single string with all four blocks
+ * concatenated; the caller decides how to splice it into the message stream.
+ */
+export async function imageToText(
+    image: ResolvedImage,
+    options: BridgeOptions,
+): Promise<string> {
+    const origMeta = await sharp(image.bytes).metadata();
+    const origWidth = origMeta.width ?? 1;
+    const origHeight = origMeta.height ?? 1;
+    const budget = resolveOcrBudget(options.ocrBudget, origWidth, origHeight);
+    const langs = options.langs ?? "chi_sim+eng";
+
+    const cacheKey = buildVisionCacheKey(image.sha256, budget, {
+        langs,
+        noResize: options.ocrNoResize,
+    });
+    const cachePath = join(options.cacheDir, cacheKey);
+
+    if (!options.bypassCache) {
+        try {
+            const cached = JSON.parse(await readFile(cachePath, "utf-8")) as CacheEntry;
+            // 缓存命中同样过封顶（旧缓存条目可能由封顶前的管线产出）。
+            return capEvidence(cached.text);
+        } catch {
+            // fall through to recompute
+        }
+    }
+
+    const [decoded, meta] = await Promise.all([
+        decodeAndColorStats(image.bytes).catch((error) => {
+            console.error("[pi-pseudo-vision] color decode failed:", error);
+            return null;
+        }),
+        readMeta(image.bytes).catch((error) => {
+            console.error("[pi-pseudo-vision] meta failed:", error);
+            return null;
+        }),
+    ]);
+
+    let colors: import("./vision/color-stats.ts").ColorStats | null = null;
+    let scan: import("./vision/pixel-scan.ts").UniversalScanResult | null = null;
+    if (decoded !== null) {
+        colors = decoded.stats;
+        const backgroundBuckets = decoded.stats.buckets
+            .filter((bucket) => bucket.share >= 0.30)
+            .map((bucket) => bucket.name);
+        scan = await pixelScanUniversal(decoded.raw, {
+            backgroundBuckets,
+            threshold: 0.15,
+            backgroundCap: 0.9,
+            maxHitsPerBucket: 5,
+        }).catch((error) => {
+            console.error("[pi-pseudo-vision] pixel scan failed:", error);
+            return null;
+        });
+    }
+
+    const darkMode = colors !== null && isDarkModeFromStats(colors);
+    const focusY = scan?.hits
+        .filter((hit) => hit.axis === "row")
+        .map((hit) => hit.pos) ?? [];
+    const focusX = scan?.hits
+        .filter((hit) => hit.axis === "col")
+        .map((hit) => hit.pos) ?? [];
+
+    let ocrBlock: string | null = null;
+    let ocrError: string | null = null;
+    let chunkCount = 0;
+    let retryCount = 0;
+    let ocrWidth = origWidth;
+    let ocrHeight = origHeight;
+    let ocrBytes = 0;
+    let preprocessSummary = `${origWidth}×${origHeight}（原图分块）`;
+
+    if (origHeight > CHUNK_HEIGHT_THRESHOLD) {
+        // Important: crop the ORIGINAL tall image first. Resizing the whole
+        // screenshot to a visual-token budget would erase the small text that
+        // chunking is meant to preserve.
+        const chunked = await chunkedOcr(image.bytes, {
+            targetHeight: CHUNK_TARGET_HEIGHT,
+            overlap: CHUNK_OVERLAP,
+            langs,
+            focusY,
+            focusX,
+            confidenceThreshold: OCR_CONFIDENCE_THRESHOLD,
+            maxRetryRegions: OCR_MAX_RETRY_REGIONS,
+            preprocessChunk: async (bytes) => (
+                await preprocessForOcr(bytes, budget, darkMode, options.ocrNoResize)
+            ).bytes,
+        }).catch((error) => {
+            console.error("[pi-pseudo-vision] chunked OCR failed:", error);
+            // 失败必须可见：证据块会带上失败原因，模型不会误判"图里没文字"。
+            ocrError = String((error as Error)?.message ?? error);
+            return null;
+        });
+        if (chunked !== null) {
+            chunkCount = chunked.chunkCount;
+            retryCount = chunked.retryCount;
+            ocrBlock = [
+                formatChunkedOcrBlock(chunked),
+                formatDigitFixBlock(chunked.digitFixes),
+            ].filter((block) => block.length > 0).join("\n");
+            preprocessSummary = `${origWidth}×${origHeight}（每块预算预处理）`;
+        }
+    } else {
+        const pre = await preprocessForOcr(
+            image.bytes,
+            budget,
+            darkMode,
+            options.ocrNoResize,
+        );
+        ocrWidth = pre.width;
+        ocrHeight = pre.height;
+        ocrBytes = pre.bytes.length;
+        preprocessSummary = `${pre.width}×${pre.height} ${pre.bytes.length}B`;
+        const ocr = await ocrWithLowConfidenceRetry(
+            pre.bytes,
+            langs,
+            {
+                threshold: OCR_CONFIDENCE_THRESHOLD,
+                maxRegions: OCR_MAX_RETRY_REGIONS,
+                upscale: OCR_RETRY_UPSCALE,
+                focusY,
+                focusX,
+            },
+        ).catch((error) => {
+            console.error("[pi-pseudo-vision] OCR failed:", error);
+            // 失败必须可见：证据块会带上失败原因，模型不会误判"图里没文字"。
+            ocrError = String((error as Error)?.message ?? error);
+            return null;
+        });
+        if (ocr !== null) {
+            retryCount = ocr.retries.length;
+            const retryBlock = formatOcrRetryBlock(ocr);
+            ocrBlock = [
+                formatOcrBlock(ocr.initial),
+                retryBlock,
+                formatDigitFixBlock(ocr.digitFixes),
+            ]
+                .filter((block) => block.length > 0)
+                .join("\n");
+        }
+    }
+
+    if (ocrBlock === null && ocrError !== null) {
+        ocrBlock = `[OCR 失败: ${ocrError}]`;
+    }
+
+    const enhancement = darkMode ? "灰度+反色" : "灰度";
+    const blocks: string[] = [];
+    blocks.push(
+        `[pi-pseudo-vision] sha256=${image.sha256.slice(0, 12)} budget=${budget} `
+        + `原图:${image.mimeType} ${image.bytes.length}B 预处理:${enhancement} ${preprocessSummary}`,
+    );
+    if (ocrBlock !== null) blocks.push(ocrBlock);
+    if (colors !== null) blocks.push(formatColorStatsBlock(colors));
+    if (scan !== null) blocks.push(formatUniversalScanBlock(scan));
+    if (meta !== null) blocks.push(formatMetaBlock(meta));
+    const text = capEvidence(blocks.join("\n\n"));
+
+    await mkdir(options.cacheDir, { recursive: true }).catch(() => undefined);
+    await writeFile(
+        cachePath,
+        JSON.stringify({
+            text,
+            budget,
+            width: ocrWidth,
+            height: ocrHeight,
+            chunkCount,
+            retryCount,
+            ocrBytes,
+            scanRowHits: scan?.rowHitCount ?? 0,
+            scanColHits: scan?.colHitCount ?? 0,
+        }),
+        "utf-8",
+    ).catch(() => undefined);
+
+    return text;
+}
+
+/**
+ * Compute the sha256 of a buffer; reused by callers that want to dedupe
+ * images across the bridge before doing any heavy work.
+ */
+export function sha256Of(bytes: Buffer): string {
+    return createHash("sha256").update(bytes).digest("hex");
+}
