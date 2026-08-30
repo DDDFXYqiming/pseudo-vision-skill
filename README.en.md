@@ -2,17 +2,17 @@ English | [简体中文](README.md)
 
 # pseudo-vision-skill
 
-> Cross-framework "tool-layer vision" skill: decompose an image locally into OCR text + color statistics + pixel-scan + metadata, so any text-only agent model can "see". One algorithm layer, installable into Claude Code / pi / Hermes / WorkBuddy — no per-framework plugin development. Fully local, **no external vision API**.
+> A cross-framework "tool-layer vision" skill. An image is decomposed locally into four kinds of evidence, OCR text, colour statistics, pixel scans, and metadata, so a text-only agent model can read it. One algorithm layer installs into Claude Code / pi / Hermes / WorkBuddy or any framework that supports skills, **no per-framework plugin development needed**. Everything runs on your machine, with **no external vision API**.
 
-**Algorithm-identical** to the [dsh-pseudo-vision](https://github.com/DDDFXYqiming/dsh-pseudo-vision) / [pi-pseudo-vision](https://github.com/DDDFXYqiming/pi-pseudo-vision) plugins — a single algorithm source (the pi repo) synced via `sync-from-pi.mjs`.
+**Algorithm-identical** to the [dsh-pseudo-vision](https://github.com/DDDFXYqiming/dsh-pseudo-vision) / [pi-pseudo-vision](https://github.com/DDDFXYqiming/pi-pseudo-vision) plugins. There is one authoritative algorithm source (the pi repo), and changes reach this repo through a single `sync-from-pi.mjs` run.
 
-**Verified end-to-end** (pi + kimi-for-coding text-only model + this skill → full image read: OCR all correct incl. Chinese, dark-theme detection, row-level layout localization).
+**Verified end-to-end**. pi plus the kimi-for-coding text-only model, with this skill installed, read a full image successfully. Every OCR line came back correct, including the Chinese one, the dark theme was detected, and layout positions were localized down to individual rows.
 
 ## Why a skill instead of plugins
 
-- **dsh** enforces a strict admission gate: pasted images are rejected outright for text-only models — plugin-level route takeover is mandatory (dsh-pseudo-vision stays a plugin)
-- **Other frameworks** (pi / Claude Code / Hermes …) don't block: text-only models know "there is an image", they just can't read it — a skill is enough
-- One implementation, installable everywhere; algorithm changes happen once in the source repo and are distributed by `sync`
+- **dsh** enforces a strict admission gate. Pasted images are rejected outright for text-only models, so catching that path requires plugin-level route takeover. dsh-pseudo-vision therefore stays a plugin.
+- **Other frameworks** (pi / Claude Code / Hermes and so on) don't block anything. A text-only model knows an image is there, it just can't read it. A skill is enough for that case.
+- One implementation installs everywhere. Algorithm changes happen once in the source repo, and one `sync` run distributes them.
 
 ## Capabilities (CLI mode ↔ plugin tool mapping)
 
@@ -21,12 +21,12 @@ English | [简体中文](README.md)
 | `full` (default) | `pseudo_vision_convert` | Aggregate all four tools into one `<pseudo-vision-context>` evidence block (cached, capped at 32K chars, chunked, OCR-failure written back) | sharp + tesseract.js |
 | `--mode ocr` | `vision_ocr` | Budget-preprocessed OCR + low-confidence retries + digit verification pass (IP/URL/port `0↔6/9/8` glyph re-OCR) | tesseract.js (chi_sim + eng) |
 | `--mode colors` | `vision_color_stats` | 9-bucket (white/black/grey/red/green/blue/yellow/cyan/magenta/other) pixel share + average luminance | sharp + histogram |
-| `--mode scan` | `vision_pixel_scan` | `target`: find rows of a colour; `universal`: all non-background row+col bands (background-exempt + partial bands surfaced) | sharp raw pixel |
+| `--mode scan` | `vision_pixel_scan` | `target` finds rows of a colour; `universal` outputs all non-background row+col bands (background-exempt + partial bands surfaced) | sharp raw pixel |
 | `--mode meta` | `vision_meta` | Dimensions, format, colour space, 4-corner + centre samples | sharp metadata |
 
-> File guard (v0.1.0): every entry point enforces a 64MB size cap + PNG/JPEG/WebP/GIF magic-number sniffing before OCR.
+> File guard (v0.1.0). Every entry point checks a 64MB size cap plus PNG/JPEG/WebP/GIF magic-number sniffing before anything reaches the OCR pipeline, so arbitrary binaries and text files cannot get in.
 >
-> Offline OCR (v0.1.0): bundled `tessdata/` + `PV_TESSDATA` env var (`langPath + gzip:false`) — no CDN round-trip on first use.
+> Offline OCR (v0.1.0). Language packs ship inside `tessdata/`, and the `PV_TESSDATA` env var (`langPath + gzip:false`) points tesseract at them. The first run no longer pulls packs from a CDN, so the whole thing works offline.
 
 ## Install
 
@@ -35,7 +35,7 @@ git clone https://github.com/DDDFXYqiming/pseudo-vision-skill.git
 cd pseudo-vision-skill && node setup.mjs   # one-shot: npm deps + offline tessdata
 ```
 
-**Install into your framework** (the layout is the skill spec: `SKILL.md` + `scripts/` + `src/`):
+**Install into your framework** (pick one; the layout itself is the skill spec, with `SKILL.md`, `scripts/`, and `src/` all in place).
 
 ```bash
 # Generic (pi / Claude Code and others honoring the ~/.agents/skills convention)
@@ -54,11 +54,11 @@ cp -r pseudo-vision-skill ~/.workbuddy/skills/pseudo-vision
 # Fallback: paste SKILL.md into project instructions, use absolute script paths
 ```
 
-On Windows, prefer a junction link (`New-Item -ItemType Junction`) so workspace edits take effect instantly.
+On Windows, prefer a junction link (`New-Item -ItemType Junction`) over copying, so edits in the workspace take effect immediately.
 
 ## Usage
 
-The skill is triggered by the LLM when an image arrives; the CLI can also be run manually:
+Once installed, the skill is triggered by the LLM when an image arrives. You can also run the CLI by hand.
 
 ```bash
 # Full conversion (equivalent to all four plugin tools aggregated)
@@ -77,11 +77,11 @@ node --experimental-strip-types scripts/pv.ts <image-path> --mode meta
 --bypass-cache       # force recompute
 ```
 
-Requires Node >= 22.6 (`--experimental-strip-types` runs the TypeScript sources directly, no build step).
+Requires Node >= 22.6. `--experimental-strip-types` runs the TypeScript sources directly, so there is no build step.
 
 ## Sample output
 
-`pi + kimi-for-coding` (text-only) reading a terminal-style screenshot — the pseudo-vision evidence the model receives:
+`pi + kimi-for-coding` (text-only) reading a terminal-style screenshot. What follows is the pseudo-vision evidence the model actually receives.
 
 ```
 [pseudo-vision] sha256=1aaa609de392 budget=normal 原图:image/png 21512B 预处理:灰度+反色 832×328 29544B
@@ -102,7 +102,7 @@ Requires Node >= 22.6 (`--experimental-strip-types` runs the TypeScript sources 
   · [TL] #282c34 (grey)  · [C] #282c34 (grey)
 ```
 
-The model reconstructs the image from this structured evidence — digit-critical tokens (IP/port) are guarded by the verification pass, fully auditable.
+The model reconstructs the whole image from this structured evidence. Digit-critical tokens such as IPs and ports are guarded by the verification pass, and the evidence stays fully auditable.
 
 ## Framework compatibility
 
@@ -116,7 +116,7 @@ The model reconstructs the image from this structured evidence — digit-critica
 
 ## Algorithm sync
 
-`pi-pseudo-vision` is the single algorithm source of truth (`src/vision/` + `src/bridge.ts`). After algorithm updates:
+`pi-pseudo-vision` is the single source of truth for the algorithm. The algorithm layer lives in `src/vision/`, the bridge in `src/bridge.ts`. After an upstream algorithm update, pull it in with the command below.
 
 ```bash
 node sync-from-pi.mjs   # pull algorithm layer + tests, then npm test
@@ -129,16 +129,16 @@ node sync-from-pi.mjs   # pull algorithm layer + tests, then npm test
 - In-process tesseract.js OCR + sharp; language packs in `tessdata/`, offline
 - First `setup.mjs` installs npm dependencies (sharp / tesseract.js native binaries)
 
-**Never**: uploads images to external APIs / calls any cloud vision service / modifies host framework code / overrides built-in tools.
+**What it never does**. Images are not uploaded to any external API, and no cloud vision service is called. Host framework code stays untouched, and no built-in tool gets overridden.
 
 ## Known limitations
 
-- Complex spatial relationships, real photos: description precision is limited — pseudo-vision evidence ≠ real multimodal understanding
-- OCR can still misread non-digit tokens; digit-critical tokens (IP/URL/port/long numbers) are covered by the verification pass
-- Colour stats give shares only, not layout/icon detail
-- Large images: OCR respects the `--budget`; very tall screenshots (> 3000px) are chunked first
-- **Skill-form limitations**: cannot rewrite the host message stream (pasted images need an accessible path); dsh's strict admission still requires the plugin form (dsh-pseudo-vision stays)
-- **Explicitly not doing**: embeddings / external vision APIs (violates the "no-model" red line) / auto-bridging (requires LLM to follow the skill instructions)
+- Description precision is limited for complex spatial relationships and real photos. Pseudo-vision evidence is not the same as real multimodal understanding.
+- OCR can still misread non-digit tokens. Digit-critical tokens (IP/URL/port/long numbers) are covered by the verification pass.
+- Colour stats give shares only. Layout and icon detail cannot be recovered from them.
+- Large images have their OCR budgeted through `--budget`. Very tall screenshots (over 3000px) are chunked first.
+- **Skill-form limitations**. A skill cannot rewrite the host message stream, and pasted images need an accessible path. dsh's strict admission still requires the plugin form, which is why dsh-pseudo-vision exists alongside.
+- **Explicitly not doing**. Embeddings and external vision APIs are out of scope, because they violate the "no-model" red line. Auto-bridging is not attempted either, since the read must be triggered by an LLM following the skill instructions.
 
 ## License
 
