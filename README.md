@@ -2,7 +2,7 @@
 
 # pseudo-vision-skill
 
-> 一个跨框架的"工具层视觉" skill。图片在本机被拆成四路证据，OCR 文字、颜色统计、像素扫描和元信息，纯文本模型的智能体拿到这包证据就能读图。同一套算法层可以装进 Claude Code / pi / Hermes / WorkBuddy 等任何支持 skill 的框架，**无需逐个开发插件**。计算全程发生在本机，**无外部视觉 API**。
+> 一个跨框架的"工具层视觉" skill。图片在本机被拆成四路证据，OCR 文字、颜色统计、像素扫描和元信息，纯文本模型的智能体拿到这包证据就能读图。同一套算法层可以装进 Claude Code / pi / Hermes / WorkBuddy 等任何支持 skill 的框架，**无需逐个开发插件**。
 
 **算法与 [dsh-pseudo-vision](https://github.com/DDDFXYqiming/dsh-pseudo-vision) / [pi-pseudo-vision](https://github.com/DDDFXYqiming/pi-pseudo-vision) 插件完全同源**。算法只有一份权威源（pi 仓库），改完用 `sync-from-pi.mjs` 一键同步过来。
 
@@ -106,13 +106,13 @@ node --experimental-strip-types scripts/pv.ts <图片路径> --mode meta
 
 ## 兼容框架
 
-| 框架 | 安装位置 | 状态 |
-|---|---|---|
-| pi | `~/.pi/agent/skills/pseudo-vision` | ✅ 实测通过（kimi-for-coding 纯文本读图） |
-| Claude Code | `~/.claude/skills/` 或 `<项目>/.claude/skills/` | 按 skill 规范，即装即用 |
-| Hermes agent | 按其 skill 机制 | 待实测 |
-| WorkBuddy | `~/.workbuddy/skills/` | 待实测 |
-| 任意框架 | project instructions + 绝对路径 | 兜底可用 |
+| 框架 | 安装位置 |
+|---|---|
+| pi | `~/.pi/agent/skills/pseudo-vision` |
+| Claude Code | `~/.claude/skills/` 或 `<项目>/.claude/skills/` |
+| Hermes agent | 按其 skill 机制 |
+| WorkBuddy | `~/.workbuddy/skills/` |
+| 任意框架 | project instructions + 绝对路径 |
 
 ## 算法同步
 
@@ -138,7 +138,6 @@ node sync-from-pi.mjs   # 拉取算法层 + 测试，然后 npm test
 - 颜色统计只给占比，还原不了布局和图标细节
 - 大图的 OCR 按 `--budget` 预算处理，高度超过 3000px 的长截图会先切块
 - **skill 形态的边界**。它改写不了宿主的消息流，粘贴的图片需要有一个可访问的路径。dsh 的严格准入仍然要插件形态来接，dsh-pseudo-vision 因此保留
-- **明确不做**。embedding 和外部 Vision API 不在范围内，那会违背"无模型"红线。自动桥接也不做，触发读图这一步需要 LLM 按 skill 指令来
 
 ## License
 
