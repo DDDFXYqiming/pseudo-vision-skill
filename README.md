@@ -1,87 +1,87 @@
-简体中文 | [English](README.en.md)
+English | [简体中文](README.zh.md)
 
 # pseudo-vision-skill
 
-> 一个跨框架的"工具层视觉" skill。图片在本机被拆成四路证据，OCR 文字、颜色统计、像素扫描和元信息，纯文本模型的智能体拿到这包证据就能读图。同一套算法层可以装进 Claude Code / pi / Hermes / WorkBuddy 等任何支持 skill 的框架，**无需逐个开发插件**。
+> A cross-framework "tool-layer vision" skill. An image is decomposed locally into four kinds of evidence, OCR text, colour statistics, pixel scans, and metadata, so a text-only agent model can read it. One algorithm layer installs into Claude Code / pi / Hermes / WorkBuddy or any framework that supports skills, **no per-framework plugin development needed**. Everything runs on your machine, with **no external vision API**.
 
-**算法与 [dsh-pseudo-vision](https://github.com/DDDFXYqiming/dsh-pseudo-vision) / [pi-pseudo-vision](https://github.com/DDDFXYqiming/pi-pseudo-vision) 插件完全同源**。算法只有一份权威源（pi 仓库），改完用 `sync-from-pi.mjs` 一键同步过来。
+**Algorithm-identical** to the [dsh-pseudo-vision](https://github.com/DDDFXYqiming/dsh-pseudo-vision) / [pi-pseudo-vision](https://github.com/DDDFXYqiming/pi-pseudo-vision) plugins. There is one authoritative algorithm source (the pi repo), and changes reach this repo through a single `sync-from-pi.mjs` run.
 
-**实机验证通过**。pi 加 kimi-for-coding 这样的纯文本模型，配上本 skill，完整读图成功。OCR 全对（含中文），深色主题判断正确，布局定位到了行级。
+**Verified end-to-end**. pi plus the kimi-for-coding text-only model, with this skill installed, read a full image successfully. Every OCR line came back correct, including the Chinese one, the dark theme was detected, and layout positions were localized down to individual rows.
 
-## 为什么是 skill 而不是插件
+## Why a skill instead of plugins
 
-- **dsh** 的准入校验极严，粘贴图片时直接拒绝发给 text-only 模型，要接住这条路只能靠插件级路由接管，所以 dsh-pseudo-vision 保留插件形态
-- **其他框架**（pi / Claude Code / Hermes 等）不拦截。text-only 模型能感觉到面前有一张图，只是自己读不出来，这种情况一个 skill 就够了
-- 一份实现，装遍所有框架。算法改动只发生在算法源仓库，跑一次 `sync` 就分发到位
+- **dsh** enforces a strict admission gate. Pasted images are rejected outright for text-only models, so catching that path requires plugin-level route takeover. dsh-pseudo-vision therefore stays a plugin.
+- **Other frameworks** (pi / Claude Code / Hermes and so on) don't block anything. A text-only model knows an image is there, it just can't read it. A skill is enough for that case.
+- One implementation installs everywhere. Algorithm changes happen once in the source repo, and one `sync` run distributes them.
 
-## 提供的能力（CLI 模式 ↔ 插件工具对照）
+## Capabilities (CLI mode ↔ plugin tool mapping)
 
-| CLI 模式 | 等价插件工具 | 作用 | 实现 |
+| CLI mode | Plugin tool | What it does | Backend |
 |---|---|---|---|
-| `full`（默认） | `pseudo_vision_convert` | 四件套聚合为单一 `<pseudo-vision-context>` 证据块（缓存 + 32K 封顶 + 分块 + OCR 失败写回） | sharp + tesseract.js |
-| `--mode ocr` | `vision_ocr` | 预算预处理 OCR + 低置信度重试 + 数字复核通道（IP/URL/端口 `0↔6/9/8` 字形重识别） | tesseract.js（chi_sim + eng） |
-| `--mode colors` | `vision_color_stats` | 9 桶（白/黑/灰/红/绿/蓝/黄/青/品红/其他）像素占比 + 平均亮度 | sharp + 直方图 |
-| `--mode scan` | `vision_pixel_scan` | `target` 找指定颜色行；`universal` 输出全部非背景色行/列（背景豁免 + 部分带 surfaced） | sharp raw pixel |
-| `--mode meta` | `vision_meta` | 尺寸、格式、色彩空间、四角/中心采样 | sharp metadata |
+| `full` (default) | `pseudo_vision_convert` | Aggregate all four tools into one `<pseudo-vision-context>` evidence block (cached, capped at 32K chars, chunked, OCR-failure written back) | sharp + tesseract.js |
+| `--mode ocr` | `vision_ocr` | Budget-preprocessed OCR + low-confidence retries + digit verification pass (IP/URL/port `0↔6/9/8` glyph re-OCR) | tesseract.js (chi_sim + eng) |
+| `--mode colors` | `vision_color_stats` | 9-bucket (white/black/grey/red/green/blue/yellow/cyan/magenta/other) pixel share + average luminance | sharp + histogram |
+| `--mode scan` | `vision_pixel_scan` | `target` finds rows of a colour; `universal` outputs all non-background row+col bands (background-exempt + partial bands surfaced) | sharp raw pixel |
+| `--mode meta` | `vision_meta` | Dimensions, format, colour space, 4-corner + centre samples | sharp metadata |
 
-> 文件护栏（v0.1.0）。所有入口先过一道 64MB 大小上限加 PNG/JPEG/WebP/GIF magic-number 嗅探，任意二进制或文本文件进不了 OCR 管线。
+> File guard (v0.1.0). Every entry point checks a 64MB size cap plus PNG/JPEG/WebP/GIF magic-number sniffing before anything reaches the OCR pipeline, so arbitrary binaries and text files cannot get in.
 >
-> 离线 OCR（v0.1.0）。`tessdata/` 内置语言包，配合 `PV_TESSDATA` 环境变量（`langPath + gzip:false`），首次运行不再从 CDN 拉语言包，完全离线可用。
+> Offline OCR (v0.1.0). Language packs ship inside `tessdata/`, and the `PV_TESSDATA` env var (`langPath + gzip:false`) points tesseract at them. The first run no longer pulls packs from a CDN, so the whole thing works offline.
 
-## 安装
+## Install
 
 ```bash
 git clone https://github.com/DDDFXYqiming/pseudo-vision-skill.git
-cd pseudo-vision-skill && node setup.mjs   # 一键：npm 依赖 + 离线语言包
+cd pseudo-vision-skill && node setup.mjs   # one-shot: npm deps + offline tessdata
 ```
 
-**装进你的框架**，任选其一。目录结构本身就符合 skill 规范，`SKILL.md`、`scripts/` 和 `src/` 一样不缺。
+**Install into your framework** (pick one; the layout itself is the skill spec, with `SKILL.md`, `scripts/`, and `src/` all in place).
 
 ```bash
-# 通用（pi / Claude Code 等支持 ~/.agents/skills 约定的框架）
+# Generic (pi / Claude Code and others honoring the ~/.agents/skills convention)
 cp -r pseudo-vision-skill ~/.agents/skills/pseudo-vision
 
 # pi
 cp -r pseudo-vision-skill ~/.pi/agent/skills/pseudo-vision
 
-# Claude Code（全局或项目级）
+# Claude Code (global or per-project)
 cp -r pseudo-vision-skill ~/.claude/skills/pseudo-vision
-# 或 cp -r pseudo-vision-skill <项目>/.claude/skills/pseudo-vision
+# or cp -r pseudo-vision-skill <project>/.claude/skills/pseudo-vision
 
 # WorkBuddy
 cp -r pseudo-vision-skill ~/.workbuddy/skills/pseudo-vision
 
-# 兜底：把 SKILL.md 内容贴进 project instructions，脚本写绝对路径
+# Fallback: paste SKILL.md into project instructions, use absolute script paths
 ```
 
-Windows 下建议用 junction 链接（`New-Item -ItemType Junction`）代替拷贝，工作区里改代码即时生效。
+On Windows, prefer a junction link (`New-Item -ItemType Junction`) over copying, so edits in the workspace take effect immediately.
 
-## 使用
+## Usage
 
-skill 装好后，LLM 收到图片会自动触发。也可以手动跑 CLI。
+Once installed, the skill is triggered by the LLM when an image arrives. You can also run the CLI by hand.
 
 ```bash
-# 完整转换（等价插件全部 4 工具聚合）
-node --experimental-strip-types scripts/pv.ts <图片路径>
+# Full conversion (equivalent to all four plugin tools aggregated)
+node --experimental-strip-types scripts/pv.ts <image-path>
 
-# 单项查询
-node --experimental-strip-types scripts/pv.ts <图片路径> --mode ocr
-node --experimental-strip-types scripts/pv.ts <图片路径> --mode colors
-node --experimental-strip-types scripts/pv.ts <图片路径> --mode scan --scan-mode universal
-node --experimental-strip-types scripts/pv.ts <图片路径> --mode meta
+# Single queries
+node --experimental-strip-types scripts/pv.ts <image-path> --mode ocr
+node --experimental-strip-types scripts/pv.ts <image-path> --mode colors
+node --experimental-strip-types scripts/pv.ts <image-path> --mode scan --scan-mode universal
+node --experimental-strip-types scripts/pv.ts <image-path> --mode meta
 
-# 常用选项
---budget large       # 密集表格/小字
---langs chi_sim+eng  # tesseract 语言
---json               # 结构化输出
---bypass-cache       # 强制重算
+# Options
+--budget large       # dense tables / tiny text
+--langs chi_sim+eng  # tesseract languages
+--json               # structured output
+--bypass-cache       # force recompute
 ```
 
-需要 Node ≥ 22.6。`--experimental-strip-types` 直接跑 TypeScript 源码，没有构建步骤。
+Requires Node >= 22.6. `--experimental-strip-types` runs the TypeScript sources directly, so there is no build step.
 
-## 效果示例
+## Sample output
 
-`pi + kimi-for-coding`（纯文本模型）读一张终端风格的截图，下面贴的是模型实际收到的伪视觉证据。
+`pi + kimi-for-coding` (text-only) reading a terminal-style screenshot. What follows is the pseudo-vision evidence the model actually receives.
 
 ```
 [pseudo-vision] sha256=1aaa609de392 budget=normal 原图:image/png 21512B 预处理:灰度+反色 832×328 29544B
@@ -102,42 +102,43 @@ node --experimental-strip-types scripts/pv.ts <图片路径> --mode meta
   · [TL] #282c34 (grey)  · [C] #282c34 (grey)
 ```
 
-模型靠这包结构化证据"脑补"出整张图。IP、端口这类数字关键 token 由复核通道兜底，证据完全可审计。
+The model reconstructs the whole image from this structured evidence. Digit-critical tokens such as IPs and ports are guarded by the verification pass, and the evidence stays fully auditable.
 
-## 兼容框架
+## Framework compatibility
 
-| 框架 | 安装位置 |
-|---|---|
-| pi | `~/.pi/agent/skills/pseudo-vision` |
-| Claude Code | `~/.claude/skills/` 或 `<项目>/.claude/skills/` |
-| Hermes agent | 按其 skill 机制 |
-| WorkBuddy | `~/.workbuddy/skills/` |
-| 任意框架 | project instructions + 绝对路径 |
+| Framework | Install location | Status |
+|---|---|---|
+| pi | `~/.pi/agent/skills/pseudo-vision` | ✅ Verified (kimi-for-coding text-only read) |
+| Claude Code | `~/.claude/skills/` or `<project>/.claude/skills/` | Per skill spec, drop-in |
+| Hermes agent | per its skill mechanism | TBD |
+| WorkBuddy | `~/.workbuddy/skills/` | TBD |
+| Any | project instructions + absolute path | Fallback works |
 
-## 算法同步
+## Algorithm sync
 
-`pi-pseudo-vision` 是算法的唯一权威源，算法层在 `src/vision/`，桥接在 `src/bridge.ts`。上游更新算法之后，跑下面的命令。
+`pi-pseudo-vision` is the single source of truth for the algorithm. The algorithm layer lives in `src/vision/`, the bridge in `src/bridge.ts`. After an upstream algorithm update, pull it in with the command below.
 
 ```bash
-node sync-from-pi.mjs   # 拉取算法层 + 测试，然后 npm test
+node sync-from-pi.mjs   # pull algorithm layer + tests, then npm test
 ```
 
-## 权限
+## Permissions
 
-- 读取磁盘上的图片文件（64MB 上限 + 图片格式 magic-number 校验）
-- 写入 `cache/` 缓存（键含 sha256、budget、langs、OCR 管线参数版本）
-- 进程内 tesseract.js OCR + sharp；语言包在 `tessdata/`，离线运行
-- 首次 `setup.mjs` 安装 npm 依赖（sharp/tesseract.js 原生二进制）
+- Reads image files on disk (64MB cap + image magic-number validation)
+- Writes `cache/` (keyed by sha256, budget, langs, OCR pipeline version)
+- In-process tesseract.js OCR + sharp; language packs in `tessdata/`, offline
+- First `setup.mjs` installs npm dependencies (sharp / tesseract.js native binaries)
 
-**不会做的事**。图片不上传到任何外部 API，也不调用云端视觉服务。宿主框架代码保持原样，内置工具不被覆盖。
+**What it never does**. Images are not uploaded to any external API, and no cloud vision service is called. Host framework code stays untouched, and no built-in tool gets overridden.
 
-## 已知边界
+## Known limitations
 
-- 复杂空间关系和真实照片的描述精度有限，伪视觉证据不等于真实的多模态理解
-- OCR 仍可能认错非数字 token。IP、URL、端口、长数字这类数字关键 token 已由复核通道兜底
-- 颜色统计只给占比，还原不了布局和图标细节
-- 大图的 OCR 按 `--budget` 预算处理，高度超过 3000px 的长截图会先切块
-- **skill 形态的边界**。它改写不了宿主的消息流，粘贴的图片需要有一个可访问的路径。dsh 的严格准入仍然要插件形态来接，dsh-pseudo-vision 因此保留
+- Description precision is limited for complex spatial relationships and real photos. Pseudo-vision evidence is not the same as real multimodal understanding.
+- OCR can still misread non-digit tokens. Digit-critical tokens (IP/URL/port/long numbers) are covered by the verification pass.
+- Colour stats give shares only. Layout and icon detail cannot be recovered from them.
+- Large images have their OCR budgeted through `--budget`. Very tall screenshots (over 3000px) are chunked first.
+- **Skill-form limitations**. A skill cannot rewrite the host message stream, and pasted images need an accessible path. dsh's strict admission still requires the plugin form, which is why dsh-pseudo-vision exists alongside.
+- **Explicitly not doing**. Embeddings and external vision APIs are out of scope, because they violate the "no-model" red line. Auto-bridging is not attempted either, since the read must be triggered by an LLM following the skill instructions.
 
 ## License
 
